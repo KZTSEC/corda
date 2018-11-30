@@ -17,6 +17,7 @@ import net.corda.node.utilities.AppendOnlyPersistentMap
 import net.corda.nodeapi.internal.crypto.X509CertificateFactory
 import net.corda.nodeapi.internal.crypto.X509Utilities
 import net.corda.nodeapi.internal.network.SignedNetworkParameters
+import net.corda.nodeapi.internal.network.verifiedNetworkMapCert
 import net.corda.nodeapi.internal.network.verifiedNetworkParametersCert
 import net.corda.nodeapi.internal.persistence.CordaPersistence
 import net.corda.nodeapi.internal.persistence.NODE_DATABASE_PREFIX
@@ -24,20 +25,8 @@ import org.apache.commons.lang.ArrayUtils
 import java.security.cert.X509Certificate
 import javax.persistence.*
 
-interface NetworkParametersStorageInternal : NetworkParametersStorage {
-    /**
-     * Return parameters epoch for the given parameters hash. Null if there are no parameters for this hash in the storage and we are unable to
-     * get them from network map.
-     */
-    fun getEpochFromHash(hash: SecureHash): Int?
-
-    /**
-     * Save signed network parameters data. Internally network parameters bytes should be stored with the signature.
-     * It's because of ability of older nodes to function in network where parameters were extended with new fields.
-     * Hash should always be calculated over the serialized bytes.
-     */
-    fun saveParameters(signedNetworkParameters: SignedDataWithCert<NetworkParameters>)
-}
+// TODO fix visibility - getEpochFromHash, saveParameters should be internal
+interface NetworkParametersStorageInternal : NetworkParametersStorage
 
 class DBNetworkParametersStorage(
         cacheFactory: NamedCacheFactory,
@@ -88,11 +77,15 @@ class DBNetworkParametersStorage(
         return database.transaction { hashToParameters[hash]?.raw?.deserialize() } ?: tryDownloadUnknownParameters(hash)
     }
 
+    override fun lookupSigned(hash: SecureHash): SignedDataWithCert<NetworkParameters>? {
+        return database.transaction { hashToParameters[hash] }
+    }
+    override fun hasParameters(hash: SecureHash): Boolean = hash in hashToParameters
     override fun getEpochFromHash(hash: SecureHash): Int? = lookup(hash)?.epoch
 
     override fun saveParameters(signedNetworkParameters: SignedNetworkParameters) {
         log.trace { "Saving new network parameters to network parameters storage." }
-        val networkParameters = signedNetworkParameters.verified()
+        val networkParameters = signedNetworkParameters.verifiedNetworkMapCert(trustRoot)
         val hash = signedNetworkParameters.raw.hash
         log.trace { "Parameters to save $networkParameters with hash $hash" }
         database.transaction {
@@ -100,7 +93,7 @@ class DBNetworkParametersStorage(
         }
     }
 
-    // TODO For the future we could get them also as signed (by network operator) attachments on transactions.
+    // TODO Revisit this approach
     private fun tryDownloadUnknownParameters(parametersHash: SecureHash): NetworkParameters? {
         return if (networkMapClient != null) {
             try {
