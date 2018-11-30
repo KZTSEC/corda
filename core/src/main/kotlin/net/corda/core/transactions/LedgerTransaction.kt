@@ -59,7 +59,7 @@ private constructor(
         //  get rid of them.
         override val networkParameters: NetworkParameters?,
         override val references: List<StateAndRef<ContractState>>,
-        private val inputStatesContractClassNameToMaxVersion: Map<ContractClassName, List<Version>>
+        private val inputStatesContractClassNameToMaxVersion: List<Pair<ContractClassName,Version>>
         //DOCEND 1
 ) : FullTransaction() {
     // These are not part of the c'tor above as that defines LedgerTransaction's serialisation format
@@ -92,9 +92,9 @@ private constructor(
                 componentGroups: List<ComponentGroup>? = null,
                 serializedInputs: List<SerializedStateAndRef>? = null,
                 serializedReferences: List<SerializedStateAndRef>? = null,
-                inputStatesContractClassNameToVersion: Map<ContractClassName, List<Version>>
+                inputStatesContractClassNameAndVersions: List<Pair<ContractClassName,Version>>
         ): LedgerTransaction {
-            return LedgerTransaction(inputs, outputs, commands, attachments, id, notary, timeWindow, privacySalt, networkParameters, references, inputStatesContractClassNameToVersion).apply {
+            return LedgerTransaction(inputs, outputs, commands, attachments, id, notary, timeWindow, privacySalt, networkParameters, references, inputStatesContractClassNameAndVersions).apply {
                 this.componentGroups = componentGroups
                 this.serializedInputs = serializedInputs
                 this.serializedReferences = serializedReferences
@@ -155,9 +155,9 @@ private constructor(
     private fun validateContractVersions(contractAttachmentsByContract: Map<ContractClassName, ContractAttachment>) {
         contractAttachmentsByContract.forEach { contractClassName, attachment ->
             val outputVersion = getContractVersion(attachment)
-            inputStatesContractClassNameToMaxVersion[contractClassName]?.forEach {
-                if (it > outputVersion) {
-                    throw TransactionVerificationException.TransactionVerificationVersionException(this.id, contractClassName, "$it", "$outputVersion")
+            inputStatesContractClassNameToMaxVersion.filter { it.first ==  contractClassName}?.forEach {
+                if (it.second > outputVersion) {
+                    throw TransactionVerificationException.TransactionVerificationVersionException(this.id, contractClassName, "${it.second}", "$outputVersion")
                 }
             }
         }
@@ -332,7 +332,7 @@ private constructor(
                     privacySalt = this.privacySalt,
                     networkParameters = this.networkParameters,
                     references = deserializedReferences,
-                    inputStatesContractClassNameToMaxVersion = emptyMap()
+                    inputStatesContractClassNameToMaxVersion = emptyList()
             )
         } else {
             // This branch is only present for backwards compatibility.
@@ -845,7 +845,7 @@ private constructor(
             notary: Party?,
             timeWindow: TimeWindow?,
             privacySalt: PrivacySalt
-    ) : this(inputs, outputs, commands, attachments, id, notary, timeWindow, privacySalt, null, emptyList(), emptyMap())
+    ) : this(inputs, outputs, commands, attachments, id, notary, timeWindow, privacySalt, null, emptyList(), emptyList())
 
     @Deprecated("LedgerTransaction should not be created directly, use WireTransaction.toLedgerTransaction instead.")
     @DeprecatedConstructorForDeserialization(1)
@@ -859,7 +859,7 @@ private constructor(
             timeWindow: TimeWindow?,
             privacySalt: PrivacySalt,
             networkParameters: NetworkParameters
-    ) : this(inputs, outputs, commands, attachments, id, notary, timeWindow, privacySalt, networkParameters, emptyList(), emptyMap())
+    ) : this(inputs, outputs, commands, attachments, id, notary, timeWindow, privacySalt, networkParameters, emptyList(), emptyList())
 
     @Deprecated("LedgerTransactions should not be created directly, use WireTransaction.toLedgerTransaction instead.")
     fun copy(inputs: List<StateAndRef<ContractState>>,
@@ -882,7 +882,7 @@ private constructor(
                 privacySalt = privacySalt,
                 networkParameters = networkParameters,
                 references = references,
-                inputStatesContractClassNameToMaxVersion = emptyMap()
+                inputStatesContractClassNameToMaxVersion = emptyList()
         )
     }
 
@@ -908,7 +908,7 @@ private constructor(
                 privacySalt = privacySalt,
                 networkParameters = networkParameters,
                 references = references,
-                inputStatesContractClassNameToMaxVersion = emptyMap()
+                inputStatesContractClassNameToMaxVersion = emptyList()
         )
     }
 }
