@@ -3,10 +3,12 @@ package net.corda.core.contracts
 import com.nhaarman.mockito_kotlin.doReturn
 import com.nhaarman.mockito_kotlin.mock
 import com.nhaarman.mockito_kotlin.whenever
-import net.corda.core.crypto.SecureHash
+import net.corda.core.crypto.*
 import net.corda.core.identity.AbstractParty
 import net.corda.core.identity.CordaX500Name
 import net.corda.core.transactions.LedgerTransaction
+import net.corda.core.transactions.SignedTransaction
+import net.corda.core.transactions.WireTransaction
 import net.corda.finance.POUNDS
 import net.corda.finance.`issued by`
 import net.corda.finance.contracts.asset.Cash
@@ -20,6 +22,7 @@ import net.corda.testing.node.MockServices
 import net.corda.testing.node.ledger
 import org.junit.Rule
 import org.junit.Test
+import java.util.jar.Attributes
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -41,7 +44,7 @@ class ConstraintsPropagationTests {
     @JvmField
     val testSerialization = SerializationEnvironmentRule()
 
-    private val ledgerServices = MockServices(
+    private val ledgerServices = object : MockServices(
             cordappPackages = listOf("net.corda.finance.contracts.asset"),
             initialIdentity = ALICE,
             identityService = rigorousMock<IdentityServiceInternal>().also {
@@ -52,17 +55,19 @@ class ConstraintsPropagationTests {
                     .copy(whitelistedContractImplementations = mapOf(
                             Cash.PROGRAM_ID to listOf(SecureHash.zeroHash, SecureHash.allOnesHash),
                             noPropagationContractClassName to listOf(SecureHash.zeroHash)))
-    )
+    ) {
+        override fun loadContractAttachment(stateRef: StateRef, forContractClassName: ContractClassName?) = servicesForResolution.loadContractAttachment(stateRef)
+    }
 
     @Test
     fun `Happy path with the HashConstraint`() {
         ledgerServices.ledger(DUMMY_NOTARY) {
-            transaction {
+            ledgerServices.recordTransaction(transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.allOnesHash)
                 output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, HashAttachmentConstraint(SecureHash.allOnesHash), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
                 command(ALICE_PUBKEY, Cash.Commands.Issue())
                 verifies()
-            }
+            })
             transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.allOnesHash)
                 input("c1")
@@ -97,26 +102,26 @@ class ConstraintsPropagationTests {
     @Test
     fun `Transaction validation fails, when constraints do not propagate correctly`() {
         ledgerServices.ledger(DUMMY_NOTARY) {
-            transaction {
+            ledgerServices.recordTransaction(transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
                 output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, HashAttachmentConstraint(SecureHash.zeroHash), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
                 command(ALICE_PUBKEY, Cash.Commands.Issue())
                 verifies()
-            }
-            transaction {
+            })
+            ledgerServices.recordTransaction(transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
                 input("c1")
                 output(Cash.PROGRAM_ID, "c2", DUMMY_NOTARY, null, WhitelistedByZoneAttachmentConstraint, Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), BOB_PARTY))
                 command(ALICE_PUBKEY, Cash.Commands.Move())
                 failsWith("are not propagated correctly")
-            }
-            transaction {
+            })
+            ledgerServices.recordTransaction(transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
                 input("c1")
                 output(Cash.PROGRAM_ID, "c3", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), BOB_PARTY))
                 command(ALICE_PUBKEY, Cash.Commands.Move())
                 failsWith("are not propagated correctly")
-            }
+            })
             transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
                 input("c1")
@@ -130,12 +135,12 @@ class ConstraintsPropagationTests {
     @Test
     fun `When the constraint of the output state is a valid transition from the input state, transaction validation works`() {
         ledgerServices.ledger(DUMMY_NOTARY) {
-            transaction {
+            ledgerServices.recordTransaction(transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
                 output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, WhitelistedByZoneAttachmentConstraint, Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
                 command(ALICE_PUBKEY, Cash.Commands.Issue())
                 verifies()
-            }
+            })
             transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
                 input("c1")
@@ -150,12 +155,12 @@ class ConstraintsPropagationTests {
     fun `Switching from the WhitelistConstraint to the Signature Constraint is possible if the attachment satisfies both constraints, and the signature constraint inherits all jar signatures`() {
 
         ledgerServices.ledger(DUMMY_NOTARY) {
-            transaction {
+            ledgerServices.recordTransaction(transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
                 output(Cash.PROGRAM_ID, "w1", DUMMY_NOTARY, null, WhitelistedByZoneAttachmentConstraint, Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
                 command(ALICE_PUBKEY, Cash.Commands.Issue())
                 verifies()
-            }
+            })
 
             // the attachment is signed
             transaction {
@@ -171,13 +176,12 @@ class ConstraintsPropagationTests {
     @Test
     fun `Switching from the WhitelistConstraint to the Signature Constraint fails if the signature constraint does not inherit all jar signatures`() {
         ledgerServices.ledger(DUMMY_NOTARY) {
-            transaction {
+            ledgerServices.recordTransaction(transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
                 output(Cash.PROGRAM_ID, "w1", DUMMY_NOTARY, null, WhitelistedByZoneAttachmentConstraint, Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
                 command(ALICE_PUBKEY, Cash.Commands.Issue())
                 verifies()
-            }
-
+            })
             // the attachment is not signed
             transaction {
                 attachment(Cash.PROGRAM_ID, SecureHash.zeroHash)
@@ -193,19 +197,19 @@ class ConstraintsPropagationTests {
     @Test
     fun `On contract annotated with NoConstraintPropagation there is no platform check for propagation, but the transaction builder can't use the AutomaticPlaceholderConstraint`() {
         ledgerServices.ledger(DUMMY_NOTARY) {
-            transaction {
+            ledgerServices.recordTransaction(transaction {
                 attachment(noPropagationContractClassName, SecureHash.zeroHash)
                 output(noPropagationContractClassName, "c1", DUMMY_NOTARY, null, HashAttachmentConstraint(SecureHash.zeroHash), NoPropagationContractState())
                 command(ALICE_PUBKEY, NoPropagationContract.Create())
                 verifies()
-            }
-            transaction {
+            })
+            ledgerServices.recordTransaction(transaction {
                 attachment(noPropagationContractClassName, SecureHash.zeroHash)
                 input("c1")
                 output(noPropagationContractClassName, "c2", DUMMY_NOTARY, null, WhitelistedByZoneAttachmentConstraint, NoPropagationContractState())
                 command(ALICE_PUBKEY, NoPropagationContract.Create())
                 verifies()
-            }
+            })
             assertFailsWith<IllegalArgumentException> {
                 transaction {
                     attachment(noPropagationContractClassName, SecureHash.zeroHash)
@@ -256,6 +260,132 @@ class ConstraintsPropagationTests {
         // Fail when encounter a AutomaticPlaceholderConstraint
         assertFailsWith<IllegalArgumentException> { HashAttachmentConstraint(SecureHash.randomSHA256()).canBeTransitionedFrom(AutomaticPlaceholderConstraint, attachment) }
         assertFailsWith<IllegalArgumentException> { AutomaticPlaceholderConstraint.canBeTransitionedFrom(AutomaticPlaceholderConstraint, attachment) }
+    }
+
+    fun MockServices.recordTransaction(wireTransaction: WireTransaction){
+        val nodeKey = ALICE_PUBKEY
+        val sigs = listOf(keyManagementService.sign(
+                SignableData(wireTransaction.id, SignatureMetadata(1, Crypto.findSignatureScheme(nodeKey).schemeNumberID)), nodeKey))
+        recordTransactions(SignedTransaction(wireTransaction, sigs))
+    }
+    @Test
+    fun `Input state contract version is not compatible with lower version`() {
+        ledgerServices.ledger(DUMMY_NOTARY) {
+            ledgerServices.recordTransaction(transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.allOnesHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "2"))
+                output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Issue())
+                verifies()
+            })
+            transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.zeroHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "1"))
+                input("c1")
+                output(Cash.PROGRAM_ID, "c2", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), BOB_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Move())
+               failsWith("No-Downgrade Rule has been breached for contract class net.corda.finance.contracts.asset.Cash. The output state contract version 1 is lower that the version of the input state (2).")
+            }
+        }
+    }
+
+    @Test
+    fun `Input state contract version is compatible with the same version`() {
+        ledgerServices.ledger(DUMMY_NOTARY) {
+            ledgerServices.recordTransaction(transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.allOnesHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "3"))
+                output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Issue())
+                verifies()
+            })
+            transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.zeroHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "3"))
+                input("c1")
+                output(Cash.PROGRAM_ID, "c2", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), BOB_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Move())
+                verifies()
+            }
+        }
+    }
+
+    @Test
+    fun `Input state contract version is compatible with higher version`() {
+        ledgerServices.ledger(DUMMY_NOTARY) {
+            ledgerServices.recordTransaction(transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.allOnesHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "1"))
+                output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Issue())
+                verifies()
+            })
+            transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.zeroHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "2"))
+                input("c1")
+                output(Cash.PROGRAM_ID, "c2", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), BOB_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Move())
+                verifies()
+            }
+        }
+    }
+
+    @Test
+    fun `All input states contract version must be lower that current contract version`() {
+        ledgerServices.ledger(DUMMY_NOTARY) {
+            ledgerServices.recordTransaction(transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.allOnesHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "1"))
+                output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Issue())
+                verifies()
+            })
+            ledgerServices.recordTransaction(transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.zeroHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "2"))
+                output(Cash.PROGRAM_ID, "c2", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Issue())
+                verifies()
+            })
+            transaction {
+                input("c1")
+                input("c2")
+                output(Cash.PROGRAM_ID, "c3", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(2000.POUNDS `issued by` ALICE_PARTY.ref(1), BOB_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Move())
+                failsWith("No-Downgrade Rule has been breached for contract class net.corda.finance.contracts.asset.Cash. The output state contract version 1 is lower that the version of the input state (2).")
+            }
+        }
+    }
+
+    @Test
+    fun `Input state with contract version can not be downgraded to no version`() {
+        ledgerServices.ledger(DUMMY_NOTARY) {
+            ledgerServices.recordTransaction(transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.allOnesHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "2"))
+                output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Issue())
+                verifies()
+            })
+            transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.zeroHash, listOf(ALICE_PUBKEY), emptyMap())
+                input("c1")
+                output(Cash.PROGRAM_ID, "c2", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), BOB_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Move())
+                failsWith("No-Downgrade Rule has been breached for contract class net.corda.finance.contracts.asset.Cash. The output state contract version 0 is lower that the version of the input state (2).")
+            }
+        }
+    }
+
+    @Test
+    fun `Input state without contract version is compatible with any version`() {
+        ledgerServices.ledger(DUMMY_NOTARY) {
+            ledgerServices.recordTransaction(transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.allOnesHash, listOf(ALICE_PUBKEY), emptyMap())
+                output(Cash.PROGRAM_ID, "c1", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), ALICE_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Issue())
+                verifies()
+            })
+            transaction {
+                attachment(Cash.PROGRAM_ID, SecureHash.zeroHash, listOf(ALICE_PUBKEY), mapOf(Attributes.Name.IMPLEMENTATION_VERSION.toString() to  "2"))
+                input("c1")
+                output(Cash.PROGRAM_ID, "c2", DUMMY_NOTARY, null, SignatureAttachmentConstraint(ALICE_PUBKEY), Cash.State(1000.POUNDS `issued by` ALICE_PARTY.ref(1), BOB_PARTY))
+                command(ALICE_PUBKEY, Cash.Commands.Move())
+                verifies()
+            }
+        }
     }
 }
 

@@ -17,7 +17,6 @@ import net.corda.core.node.services.KeyManagementService
 import net.corda.core.serialization.SerializationContext
 import net.corda.core.serialization.SerializationFactory
 import net.corda.core.utilities.contextLogger
-import net.corda.core.utilities.lazyMapped
 import net.corda.core.utilities.warnOnce
 import java.security.PublicKey
 import java.time.Duration
@@ -173,7 +172,7 @@ open class TransactionBuilder @JvmOverloads constructor(
         val refStateContractAttachments: List<AttachmentId> = referenceStateGroups
                 .filterNot { it.key in allContracts }
                 .map { refStateEntry ->
-                    selectAttachmentThatSatisfiesConstraints(true, refStateEntry.key, refStateEntry.value, services)
+                    selectAttachmentThatSatisfiesConstraints(true, refStateEntry.key, refStateEntry.value, emptySet(), services) //TODO contract class version for reference states
                 }
 
         val contractClassNameToInputStateRef : Map<ContractClassName, Set<StateRef>> = inputsWithTransactionState.map { Pair(it.state.contract,it.ref) }.groupBy { it.first }.mapValues { it.value.map { e -> e.second }.toSet() }
@@ -252,6 +251,7 @@ open class TransactionBuilder @JvmOverloads constructor(
                 false,
                 contractClassName,
                 inputsAndOutputs.filterNot { it.constraint in automaticConstraints },
+                inputStateRefs,
                 services)
 
         // This will contain the hash of the JAR that will be used by this Transaction.
@@ -294,14 +294,6 @@ open class TransactionBuilder @JvmOverloads constructor(
                 }
                 require(outputConstraint.isSatisfiedBy(constraintAttachment)) { "Output state constraint check fails. $outputConstraint" }
                 it
-            }
-        }
-
-        val outputVersion = getContractVersion(attachmentToUse)
-        inputStateRefs?.forEach {
-            val inputMaxVersion = getContractVersion(services.loadContractAttachment(it))
-            require(inputMaxVersion <= outputVersion) { //it's enough if once inputs violates the rule
-                "No-Downgrade Rule has been breached for contract class $contractClassName. The output state contract version $outputVersion is lower that the version of the input state ($inputMaxVersion)."
             }
         }
 
@@ -389,11 +381,16 @@ open class TransactionBuilder @JvmOverloads constructor(
      * TODO - When the SignatureConstraint and contract version logic is in, this will need to query the attachments table and find the latest one that satisfies all constraints.
      * TODO - select a version of the contract that is no older than the one from the previous transactions.
      */
-    private fun selectAttachmentThatSatisfiesConstraints(isReference: Boolean, contractClassName: String, states: List<TransactionState<ContractState>>, services: ServicesForResolution): AttachmentId {
+    private fun selectAttachmentThatSatisfiesConstraints(isReference: Boolean, contractClassName: String, states: List<TransactionState<ContractState>>, stateRefs: Set<StateRef>?, services: ServicesForResolution): AttachmentId {
         val constraints = states.map { it.constraint }
         require(constraints.none { it in automaticConstraints })
         require(isReference || constraints.none { it is HashAttachmentConstraint })
-        return services.cordappProvider.getContractAttachmentID(contractClassName) ?: throw MissingContractAttachments(states)
+
+        val highestContractClassVersion : Version? = stateRefs?.map { getContractVersion(services.loadContractAttachment(it)) }?.max()
+        // TODO select by contract class with max contract class version which is higher than  minimumRequiredContractSatetVersion
+        // services.attachments.queryAttachments()
+
+        return services.cordappProvider.getContractAttachmentID(contractClassName) ?: throw MissingContractAttachments(states, highestContractClassVersion)
     }
 
     private fun useWhitelistedByZoneAttachmentConstraint(contractClassName: ContractClassName, networkParameters: NetworkParameters) = contractClassName in networkParameters.whitelistedContractImplementations.keys
