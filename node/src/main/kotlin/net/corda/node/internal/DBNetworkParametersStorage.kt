@@ -25,7 +25,6 @@ import org.apache.commons.lang.ArrayUtils
 import java.security.cert.X509Certificate
 import javax.persistence.*
 
-// TODO fix visibility - getEpochFromHash, saveParameters should be internal
 interface NetworkParametersStorageInternal : NetworkParametersStorage
 
 class DBNetworkParametersStorage(
